@@ -1,7 +1,7 @@
 """
-SAE J1939 vehicle bus standard.
-
-http://en.wikipedia.org/wiki/J1939
+Implementing cyber-security for CAN protocol. Referring to protocol described in [1].
+[1] C. Lin and A. Sangiovanni-Vincentelli, 'Cyber-Security for the Controller Area Network (CAN) Communication Protocol', 
+in International Conference on Cyber Security, Cyber Warfare and Digital Forensic (CyberSec), Kuala Lumpur, Malaysia, 2012, pp. 1-7.
 """
 
 import threading
@@ -48,10 +48,10 @@ class Bus(BusABC):
         * :pgn: An integer PGN to show
     """
 
-    channel_info = "j1939 bus"
+    channel_info = "SecureCAN bus"
 
-    def __init__(self, pdu_type=PDU, *args, **kwargs):
-        logger.debug("Creating a new j1939 bus")
+    def __init__(self, *args, **kwargs):
+        logger.debug("Creating a new bus")
 
         self.rx_can_message_queue = Queue()
 
