@@ -8,7 +8,7 @@ from .nodename import NodeName
 logger = logging.getLogger(__name__)
 
 
-class PDU(object):
+class SecureMessage(Message):
 
     """
     A PDU is a higher level abstraction of a CAN message.
