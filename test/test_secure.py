@@ -24,5 +24,6 @@ logging.getLogger("").setLevel(logging.DEBUG)
 class SecureBusTest(unittest.TestCase):
 
     def testCreateBus(self):
-        self.bus = secure.Bus(channel=can_interface)
+        self.bus = secure.Bus(node_id=0, channel=can_interface)
+        print self.bus.node.address_list
         self.bus.shutdown()

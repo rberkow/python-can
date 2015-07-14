@@ -18,7 +18,7 @@ channel = 'vcan0'
 import can
 can.rc['interface'] = 'socketcan_ctypes'
 
-
+@unittest.skip("skipping")
 class ControllerAreaNetworkTestCase(unittest.TestCase):
 
     """
