@@ -12,6 +12,7 @@ import random
 
 import can
 from can.interfaces.interface import Bus
+from can.protocols.secure.arbitrationid import ArbitrationID
 
 can_interface = 'vcan0'
 from can.protocols import secure
@@ -25,5 +26,7 @@ class SecureBusTest(unittest.TestCase):
 
     def testCreateBus(self):
         self.bus = secure.Bus(node_id=0, channel=can_interface)
-        print self.bus.node.address_list
         self.bus.shutdown()
+
+    def testArbitrationID(self):
+        self.arbitration_id = ArbitrationID(priority=5, destination_addresses = [14, 6], source_address=20)
