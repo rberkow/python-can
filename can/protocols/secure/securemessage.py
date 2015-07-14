@@ -1,9 +1,9 @@
 import logging
 from can import Message
 
-from .arbitrationid import ArbitrationID
-from .constants import pgn_strings, PGN_AC_ADDRESS_CLAIMED
-from .nodename import NodeName
+from can.protocols.secure.arbitrationid import ArbitrationID
+from can.protocols.secure.constants import pgn_strings, PGN_AC_ADDRESS_CLAIMED
+from can.protocols.secure.nodename import NodeName
 
 logger = logging.getLogger(__name__)
 
