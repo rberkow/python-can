@@ -39,9 +39,9 @@ class Bus(BusABC):
     """
     A CAN Bus that implements the Chung-Wei Lin security features.
 
-    :param NodeID node_id:
-        A NodeID object, messages must be directed to this node in order to be accepted
-        at this instance of the bus.
+    :param int node_id:
+        An integer indicating the node ID. Messages must be directed to this node 
+        in order to be accepted at this instance of the bus.
 
     """
 
@@ -50,31 +50,19 @@ class Bus(BusABC):
     def __init__(self, node_id, *args, **kwargs):
         logger.debug("Creating a new bus")
 
+        self.node = Node(bus=self, name=NodeName(node_id))
+
         self.rx_can_message_queue = Queue()
 
         super(Bus, self).__init__()
-        self._long_message_throttler = threading.Thread(target=self._throttler_function)
-        #self._long_message_throttler.daemon = True
 
-        self._incomplete_received_msgs = {}
-        self._incomplete_received_msg_lengths = {}
-        self._incomplete_transmitted_msgs = {}
-        self._long_message_segment_queue = Queue(0)
-
-        # Convert address of secure message into CAN filter
-
-        can_id = node_id << 8
-        can_mask = 0xFFFF00
-        logger.info("Adding CAN ID filter: {:0x}:{:0x}".format(can_id, can_mask))
-        can_filters = {"can_id": can_id, "can_mask": can_mask}
-        kwargs['can_filters'] = can_filters
+        can_id = node_id
 
         logger.debug("Creating a new can bus")
         self.can_bus = RawCanBus(*args, **kwargs)
         self.can_notifier = Notifier(self.can_bus, [self.rx_can_message_queue.put])
         self.secure_notifier = Notifier(self, [])
 
-        self._long_message_throttler.start()
 
     def recv(self, timeout=None):
         logger.debug("Waiting for new message")
@@ -84,19 +72,24 @@ class Bus(BusABC):
         except Empty:
             return
 
-        rx_pdu = None
+        rx_msg = None
 
         if isinstance(m, RawMessage):
             logger.debug('Got a Message: %s' % m)
-            if m.id_type:
-                # Extended ID
-                # Only J1939 messages (i.e. 29-bit IDs) should go further than this point.
-                # Non-J1939 systems can co-exist with J1939 systems, but J1939 doesn't care
-                # about the content of their messages.
-                logger.info('Message is j1939 msg')
-                rx_pdu = self._process_incoming_message(m)
+
+
+            if can_id is m.destination:
+                logger.info('Message is intended for this node')
+                rx_msg = self._process_incoming_message(m)
+            # if m.id_type:
+            #     # Extended ID
+            #     # Only J1939 messages (i.e. 29-bit IDs) should go further than this point.
+            #     # Non-J1939 systems can co-exist with J1939 systems, but J1939 doesn't care
+            #     # about the content of their messages.
+            #     logger.info('Message is j1939 msg')
+            #     rx_pdu = self._process_incoming_message(m)
             else:
-                logger.info("Received non J1939 message (ignoring)")
+                logger.info("Received message intended for a different node (ignoring)")
 
             # TODO: Decide what to do with CAN errors
             if m.is_error_frame:
