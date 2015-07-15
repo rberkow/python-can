@@ -19,21 +19,21 @@ from can.protocols import j1939
 import logging
 logging.getLogger("").setLevel(logging.DEBUG)
 
-@unittest.skip("skipping")
+@unittest.skip("")
 def generate_long_messages(arbitration_id):
     for l in list(range(10)) + [100, 1000, 1784, 1785]:
         data = bytearray([random.randrange(0, 2 ** 8 - 1) for b in range(l)])
         m = j1939.PDU(arbitration_id=arbitration_id, data=data)
         yield m, data
 
-@unittest.skip("skipping")
+@unittest.skip("")
 class J1939ImportTest(unittest.TestCase):
 
     def testProtocolImportable(self):
         assert hasattr(j1939, 'PDU')
         assert hasattr(j1939, 'ArbitrationID')
 
-@unittest.skip("skipping")
+@unittest.skip("")
 class StaticJ1939Test(unittest.TestCase):
 
     def setUp(self):
@@ -75,14 +75,14 @@ class StaticJ1939Test(unittest.TestCase):
         data = bytes([random.randrange(0, 2 ** 8 - 1) for b in range(1786)])
         self.assertRaises(j1939.PDU, kwargs={'arbitration_id': self.arbitration_id, 'data': data})
 
-@unittest.skip("skipping")
+@unittest.skip("")
 class J1939BusTest(unittest.TestCase):
 
     def testCreateBus(self):
         self.bus = j1939.Bus(channel=can_interface)
         self.bus.shutdown()
 
-@unittest.skip("skipping")
+@unittest.skip("")
 class NetworkJ1939Test(unittest.TestCase):
 
     """
