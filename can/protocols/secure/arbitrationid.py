@@ -53,9 +53,6 @@ class ArbitrationID(object):
         return _destinations
 
     def __str__(self):
-        """
-        Readable format
-        """
         dests = "00" + bin(self.destinations)[2:]
-        return "PRI=%d SRC=0x%.2x DST1=0x%.2x DST2=0x%.2x DST3=0x%.2x" % (
-                self.priority, self.source_address, int(dests[:6], 2), int(dests[6:12], 2), int(dests[12:], 2))
+        return "PRI=%d SRC=0x%.2x QUANT=%d DST1=0x%.2x DST2=0x%.2x DST3=0x%.2x" % (
+                self.priority, self.source_address, self.destination_quantity, int(dests[:6], 2), int(dests[6:12], 2), int(dests[12:], 2))
