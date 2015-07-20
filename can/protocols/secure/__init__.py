@@ -5,19 +5,18 @@ in International Conference on Cyber Security, Cyber Warfare and Digital Forensi
 
 """
 
-import threading
 import logging
+import select
+import ctypes
+import can
 
-try:
-    from queue import Queue, Empty
-except ImportError:
-    from Queue import Queue, Empty
-import time
-import copy
 
 # By this stage the can.rc should have been set up
 from can.message import Message as RawMessage
 from can.interfaces.interface import Bus as RawCanBus
+from can.interfaces.socketcan_ctypes import *
+from can.interfaces.socketcan_constants import *
+from can.interfaces import interface
 
 from can.notifier import Notifier
 
@@ -25,7 +24,6 @@ from can.notifier import Notifier
 from can.protocols.secure.securemessage import SecureMessage
 from can.protocols.secure.pgn import PGN
 from can.bus import BusABC
-from can.protocols.secure import constants
 from can.protocols.secure.node import Node
 from can.protocols.secure.nodename import NodeName
 from can.protocols.secure.arbitrationid import ArbitrationID
@@ -37,7 +35,7 @@ logger = logging.getLogger(__name__)
 class Bus(BusABC):
 
     """
-    A CAN Bus that implements the Chung-Wei Lin security features.
+    A CAN Bus that implements the Chung-Wei Lin security features. Only works with SocketCAN for now.
 
     :param int node_id:
         An integer indicating the node ID. Messages must be directed to this node 
@@ -47,388 +45,111 @@ class Bus(BusABC):
 
     channel_info = "secure bus"
 
-    def __init__(self, node_id, *args, **kwargs):
-        logger.debug("Creating a new bus")
+    def __init__(self,
+                 channel=can.rc['channel'],
+                 receive_own_messages=False,
+                 *args, **kwargs):
+        """
+        :param str channel:
+            The can interface name with which to create this bus. An example channel
+            would be 'vcan0'.
+        """
 
-        self.node = Node(bus=self, name=NodeName(node_id))
+        self.socket = createSocket()
 
-        self.rx_can_message_queue = Queue()
+        log.debug("Result of createSocket was %d", self.socket)
+        error = bindSocket(self.socket, channel)
 
-        super(Bus, self).__init__()
+        if receive_own_messages:
+            error1 = recv_own_msgs(self.socket)
 
-        can_id = node_id
-
-        logger.debug("Creating a new can bus")
-        self.can_bus = RawCanBus(*args, **kwargs)
-        self.can_notifier = Notifier(self.can_bus, [self.rx_can_message_queue.put])
-        self.secure_notifier = Notifier(self, [])
-
+        super(Bus, self).__init__(*args, **kwargs)
 
     def recv(self, timeout=None):
-        logger.debug("Waiting for new message")
-        logger.debug("Timeout is {}".format(timeout))
-        try:
-            m = self.rx_can_message_queue.get(timeout=timeout)
-        except Empty:
-            return
+        log.debug("Trying to read a msg")
 
-        rx_msg = None
+        if timeout is None or len(select.select([self.socket],
+                                                [], [], timeout)[0]) > 0:
+            packet = capturePacket(self.socket)
+        else:
+            # socket wasn't readable or timeout occurred
+            return None
 
-        if isinstance(m, RawMessage):
-            logger.debug('Got a Message: %s' % m)
+        log.debug("Receiving a message")
 
+        arbitration_id = packet['CAN ID'] & MSK_ARBID
 
-            if can_id is m.destination:
-                logger.info('Message is intended for this node')
-                rx_msg = self._process_incoming_message(m)
-            # if m.id_type:
-            #     # Extended ID
-            #     # Only J1939 messages (i.e. 29-bit IDs) should go further than this point.
-            #     # Non-J1939 systems can co-exist with J1939 systems, but J1939 doesn't care
-            #     # about the content of their messages.
-            #     logger.info('Message is j1939 msg')
-            #     rx_pdu = self._process_incoming_message(m)
-            else:
-                logger.info("Received message intended for a different node (ignoring)")
+        # Flags: EXT, RTR, ERR
+        flags = (packet['CAN ID'] & MSK_FLAGS) >> 29
 
-            # TODO: Decide what to do with CAN errors
-            if m.is_error_frame:
-                logger.warning("Appears we got an error frame!")
+        rx_msg = SecureMessage(
+            timestamp=packet['Timestamp'],
+            is_remote_frame=bool(flags & SKT_RTRFLG),
+            extended_id=bool(flags & EXTFLG),
+            is_error_frame=bool(flags & SKT_ERRFLG),
+            arbitration_id=arbitration_id,
+            dlc=packet['DLC'],
+            data=packet['Data'],
+            MACs=packet['MAC']
+        )
 
-                #rx_error = CANError(timestamp=m.timestamp)
-                # if rx_error is not None:
-                #     logger.info('Sending error "%s" to registered listeners.' % rx_error)
-                #     for listener in self.listeners:
-                #         if hasattr(listener, 'on_error_received'):
-                #             listener.on_error_received(rx_error)
-
-        # Return to BusABC where it will get fed to any listeners
-        return rx_pdu
+        return rx_msg
 
     def send(self, msg):
-        messages = []
-        if len(msg.data) > 8:
-            # Making a copy of the PDU so that the original
-            # is not altered by the data padding.
-            pdu = copy.deepcopy(msg)
-            pdu.data = bytearray(pdu.data)
+        return None
 
-            pdu_length_lsb, pdu_length_msb = divmod(len(pdu.data), 256)
+def capturePacket(socketID):
+    """
+    Captures a packet of data from the given socket.
 
-            while len(pdu.data) % 7 != 0:
-                pdu.data += b'\xFF'
+    :param int socketID:
+        The socket to read from
 
-            for i, segment in enumerate(pdu.data_segments(segment_length=7)):
-                arbitration_id = copy.deepcopy(pdu.arbitration_id)
-                arbitration_id.pgn.value = constants.PGN_TP_DATA_TRANSFER
-                if pdu.arbitration_id.pgn.is_destination_specific and \
-                   pdu.arbitration_id.destination_address != constants.DESTINATION_ADDRESS_GLOBAL:
-                    arbitration_id.pgn.pdu_specific = pdu.arbitration_id.pgn.pdu_specific
-                else:
-                    arbitration_id.pgn.pdu_specific = constants.DESTINATION_ADDRESS_GLOBAL
+    :return:
+        A dictionary with the following keys:
+        +-----------+----------------------------+
+        | 'CAN ID'  |  int                       |
+        +-----------+----------------------------+
+        | 'DLC'     |  int                       |
+        +-----------+----------------------------+
+        | 'Data'    |  list                      |
+        +-----------+----------------------------+
+        | 'MAC'     |  int                       |
+        +-----------+----------------------------+
+        |'Timestamp'|   float                    |
+        +-----------+----------------------------+
 
-                message = RawMessage(arbitration_id=arbitration_id.can_id,
-                                  extended_id=True,
-                                  dlc=(len(segment) + 1),
-                                  data=(bytearray([i + 1]) + segment))
-                messages.append(message)
+    """
+    packet = {}
 
-            if pdu.arbitration_id.pgn.is_destination_specific and \
-               pdu.arbitration_id.destination_address != constants.DESTINATION_ADDRESS_GLOBAL:
-                destination_address = pdu.arbitration_id.pgn.pdu_specific
-                if pdu.arbitration_id.source_address in self._incomplete_transmitted_msgs:
-                    if destination_address in self._incomplete_transmitted_msgs[pdu.arbitration_id.source_address]:
-                        logger.warning("Duplicate transmission of PDU:\n{}".format(pdu))
-                else:
-                    self._incomplete_transmitted_msgs[pdu.arbitration_id.source_address] = {}
-                self._incomplete_transmitted_msgs[pdu.arbitration_id.source_address][destination_address] = messages
-            else:
-                destination_address = constants.DESTINATION_ADDRESS_GLOBAL
+    frame = CAN_FRAME()
+    time = TIME_VALUE()
 
-            rts_arbitration_id = ArbitrationID(source_address=pdu.source)
-            rts_arbitration_id.pgn.value = constants.PGN_TP_CONNECTION_MANAGEMENT
-            rts_arbitration_id.pgn.pdu_specific = pdu.arbitration_id.pgn.pdu_specific
+    # Fetching the Arb ID, DLC and Data
+    bytes_read = libc.read(socketID, ctypes.byref(frame), ctypes.sizeof(frame))
 
-            temp_pgn = copy.deepcopy(pdu.arbitration_id.pgn)
-            if temp_pgn.is_destination_specific:
-                temp_pgn.value -= temp_pgn.pdu_specific
+    # Fetching the timestamp
+    error = libc.ioctl(socketID, SIOCGSTAMP, ctypes.byref(time))
 
-            pgn_msb = ((temp_pgn.value & 0xFF0000) >> 16)
-            pgn_middle = ((temp_pgn.value & 0x00FF00) >> 8)
-            pgn_lsb = (temp_pgn.value & 0x0000FF)
+    packet['CAN ID'] = frame.can_id
+    packet['DLC'] = frame.can_dlc
+    packet["Data"] = [frame.data[i] for i in range(frame.can_dlc)]
+    packet['MAC'] = frame.MAC
 
-            if pdu.arbitration_id.pgn.is_destination_specific and \
-               pdu.arbitration_id.destination_address != constants.DESTINATION_ADDRESS_GLOBAL:
-                # send request to send
-                rts_msg = RawMessage(extended_id=True,
-                                  arbitration_id=rts_arbitration_id.can_id,
-                                  data=[constants.CM_MSG_TYPE_RTS,
-                                        pdu_length_msb,
-                                        pdu_length_lsb,
-                                        len(messages),
-                                        0xFF,
-                                        pgn_lsb,
-                                        pgn_middle,
-                                        pgn_msb],
-                                  dlc=8)
-                self.can_bus.send(rts_msg)
-            else:
-                rts_arbitration_id.pgn.pdu_specific = constants.DESTINATION_ADDRESS_GLOBAL
-                bam_msg = RawMessage(extended_id=True,
-                                  arbitration_id=rts_arbitration_id.can_id,
-                                  data=[constants.CM_MSG_TYPE_BAM,
-                                        pdu_length_msb,
-                                        pdu_length_lsb, len(messages),
-                                        0xFF,
-                                        pgn_lsb,
-                                        pgn_middle,
-                                        pgn_msb],
-                                  dlc=8)
-                # send BAM
-                self.can_bus.send(bam_msg)
+    timestamp = time.tv_sec + (time.tv_usec / 1000000.0)
 
-                for message in messages:
-                    # send data messages - no flow control, so no need to wait
-                    # for receiving devices to acknowledge
-                    self._long_message_segment_queue.put_nowait(message)
-        else:
-            can_message = RawMessage(arbitration_id=msg.arbitration_id.can_id,
-                                  extended_id=True,
-                                  dlc=len(msg.data),
-                                  data=msg.data)
+    packet['Timestamp'] = timestamp
 
-            self.can_bus.send(can_message)
+    return packet
 
-    def shutdown(self):
-        self.can_notifier.running.clear()
-        self.can_bus.shutdown()
-        self.secure_notifier.running.clear()
-        super(Bus, self).shutdown()
-
-    def _process_incoming_message(self, msg):
-        logger.debug("Processing incoming message")
-        logging.debug(msg)
-        arbitration_id = ArbitrationID()
-        arbitration_id.can_id = msg.arbitration_id
-        if arbitration_id.pgn.is_destination_specific:
-            arbitration_id.pgn.value -= arbitration_id.pgn.pdu_specific
-        pdu = self._pdu_type(timestamp=msg.timestamp, data=msg.data, info_strings=[])
-        pdu.arbitration_id.can_id = msg.arbitration_id
-        pdu.info_strings = []
-
-        if arbitration_id.pgn.value == constants.PGN_TP_CONNECTION_MANAGEMENT:
-            retval = self._connection_management_handler(pdu)
-        elif arbitration_id.pgn.value == constants.PGN_TP_DATA_TRANSFER:
-            retval = self._data_transfer_handler(pdu)
-        else:
-            retval = pdu
-
-        return retval
-
-    def _connection_management_handler(self, msg):
-        if len(msg.data) == 0:
-            msg.info_strings.append("Invalid connection management message - no data bytes")
-            return msg
-        cmd = msg.data[0]
-        retval = None
-        if cmd == constants.CM_MSG_TYPE_RTS:
-            retval = self._process_rts(msg)
-        elif cmd == constants.CM_MSG_TYPE_CTS:
-            retval = self._process_cts(msg)
-        elif cmd == constants.CM_MSG_TYPE_EOM_ACK:
-            retval = self._process_eom_ack(msg)
-        elif cmd == constants.CM_MSG_TYPE_BAM:
-            retval = self._process_bam(msg)
-        elif cmd == constants.CM_MSG_TYPE_ABORT:
-            retval = self._process_abort(msg)
-
-        return retval
-
-    def _data_transfer_handler(self, msg):
-        msg_source = msg.arbitration_id.source_address
-        pdu_specific = msg.arbitration_id.pgn.pdu_specific
-
-        if msg_source in self._incomplete_received_msgs:
-
-            if pdu_specific in self._incomplete_received_msgs[msg_source]:
-                self._incomplete_received_msgs[msg_source][pdu_specific].data.extend(msg.data[1:])
-                total = self._incomplete_received_msg_lengths[msg_source][pdu_specific]["total"]
-                if len(self._incomplete_received_msgs[msg_source][pdu_specific].data) >= total:
-                    if pdu_specific == constants.DESTINATION_ADDRESS_GLOBAL:
-                        # Looks strange but makes sense - in the absence of explicit flow control,
-                        # the last CAN packet in a long message *is* the end of message acknowledgement
-                        return self._process_eom_ack(msg)
-
-                    # Find a Node object so we can search its list of known node addresses for this node
-                    # so we can find if we are responsible for sending the EOM ACK message
-                    send_ack = any(True for l in self.secure_notifier.listeners
-                                   if isinstance(l, Node) and (l.address == pdu_specific or
-                                                               pdu_specific in l.address_list))
-                    if send_ack:
-                        arbitration_id = ArbitrationID()
-                        arbitration_id.pgn.value = constants.PGN_TP_CONNECTION_MANAGEMENT
-                        arbitration_id.pgn.pdu_specific = msg_source
-                        arbitration_id.source_address = pdu_specific
-                        total_length = self._incomplete_received_msg_lengths[msg_source][pdu_specific]["total"]
-                        _num_packages = self._incomplete_received_msg_lengths[msg_source][pdu_specific]["num_packages"]
-                        pgn = self._incomplete_received_msgs[msg_source][pdu_specific].arbitration_id.pgn
-                        pgn_msb = ((pgn.value & 0xFF0000) >> 16)
-                        _pgn_middle = ((pgn.value & 0x00FF00) >> 8)
-                        _pgn_lsb = 0
-
-                        div, mod = divmod(total_length, 256)
-                        can_message = RawMessage(arbitration_id=arbitration_id.can_id,
-                                              extended_id=True,
-                                              dlc=8,
-                                              data=[constants.CM_MSG_TYPE_EOM_ACK,
-                                                    mod,  # total_length % 256,
-                                                    div,  # total_length / 256,
-                                                    _num_packages,
-                                                    0xFF,
-                                                    _pgn_lsb,
-                                                    _pgn_middle,
-                                                    pgn_msb])
-                        self.can_bus.send(can_message)
-
-                    return self._process_eom_ack(msg)
-
-    def _process_rts(self, msg):
-        if msg.arbitration_id.source_address not in self._incomplete_received_msgs:
-            self._incomplete_received_msgs[msg.arbitration_id.source_address] = {}
-            self._incomplete_received_msg_lengths[msg.arbitration_id.source_address] = {}
-
-        # Delete any previous messages that were not finished correctly
-        if msg.arbitration_id.pgn.pdu_specific in self._incomplete_received_msgs[msg.arbitration_id.source_address]:
-            del self._incomplete_received_msgs[msg.arbitration_id.source_address][msg.arbitration_id.pgn.pdu_specific]
-            del self._incomplete_received_msg_lengths[msg.arbitration_id.source_address][
-                msg.arbitration_id.pgn.pdu_specific]
-
-        if msg.data[0] == constants.CM_MSG_TYPE_BAM:
-            self._incomplete_received_msgs[msg.arbitration_id.source_address][0xFF] = self._pdu_type()
-            self._incomplete_received_msgs[msg.arbitration_id.source_address][0xFF].arbitration_id.pgn.value = int(
-                ("%.2X%.2X%.2X" % (msg.data[7], msg.data[6], msg.data[5])), 16)
-            if self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                    0xFF].arbitration_id.pgn.is_destination_specific:
-                self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                    0xFF].arbitration_id.pgn.pdu_specific = msg.arbitration_id.pgn.pdu_specific
-            self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                0xFF].arbitration_id.source_address = msg.arbitration_id.source_address
-            self._incomplete_received_msgs[msg.arbitration_id.source_address][0xFF].data = []
-            _message_size = int("%.2X%.2X" % (msg.data[2], msg.data[1]), 16)
-            self._incomplete_received_msg_lengths[msg.arbitration_id.source_address][0xFF] = {"total": _message_size,
-                                                                                              "chunk": 255,
-                                                                                              "num_packages": msg.data[
-                                                                                                  3], }
-        else:
-            self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                msg.arbitration_id.pgn.pdu_specific] = self._pdu_type()
-            self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                msg.arbitration_id.pgn.pdu_specific].arbitration_id.pgn.value = int(
-                ("%.2X%.2X%.2X" % (msg.data[7], msg.data[6], msg.data[5])), 16)
-            if self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                    msg.arbitration_id.pgn.pdu_specific].arbitration_id.pgn.is_destination_specific:
-                self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                    msg.arbitration_id.pgn.pdu_specific].arbitration_id.pgn.pdu_specific = msg.arbitration_id.pgn.pdu_specific
-            self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                msg.arbitration_id.pgn.pdu_specific].arbitration_id.source_address = msg.arbitration_id.source_address
-            self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                msg.arbitration_id.pgn.pdu_specific].data = []
-        _message_size = int("%.2X%.2X" % (msg.data[2], msg.data[1]), 16)
-        self._incomplete_received_msg_lengths[msg.arbitration_id.source_address][
-            msg.arbitration_id.pgn.pdu_specific] = {"total": _message_size, "chunk": 255, "num_packages": msg.data[3], }
-
-        if msg.data[0] != constants.CM_MSG_TYPE_BAM:
-            for _listener in self.secure_notifier.listeners:
-                if isinstance(_listener, Node):
-                    # find a Node object so we can search its list of known node addresses
-                    # for this node - if we find it we are responsible for sending the CTS message
-                    if _listener.address == msg.arbitration_id.pgn.pdu_specific or msg.arbitration_id.pgn.pdu_specific in _listener.address_list:
-                        _cts_arbitration_id = ArbitrationID(source_address=msg.arbitration_id.pgn.pdu_specific)
-                        _cts_arbitration_id.pgn.value = constants.PGN_TP_CONNECTION_MANAGEMENT
-                        _cts_arbitration_id.pgn.pdu_specific = msg.arbitration_id.source_address
-                        _data = [0x11, msg.data[4], 0x01, 0xFF, 0xFF]
-                        _data.extend(msg.data[5:])
-                        cts_msg = RawMessage(extended_id=True, arbitration_id=_cts_arbitration_id.can_id, data=_data,
-                                          dlc=8)
-
-                        # send clear to send
-                        self.can_bus.send(cts_msg)
-                        return
-
-    def _process_cts(self, msg):
-        if msg.arbitration_id.pgn.pdu_specific in self._incomplete_transmitted_msgs:
-            if msg.arbitration_id.source_address in self._incomplete_transmitted_msgs[
-                    msg.arbitration_id.pgn.pdu_specific]:
-                # Next packet number in CTS message (Packet numbers start at 1 not 0)
-                start_index = msg.data[2] - 1
-                # Using total number of packets in CTS message
-                end_index = start_index + msg.data[1]
-                for _msg in self._incomplete_transmitted_msgs[msg.arbitration_id.pgn.pdu_specific][
-                        msg.arbitration_id.source_address][start_index:end_index]:
-                    self.can_bus.send(_msg)
-
-    def _process_eom_ack(self, msg):
-        if (msg.arbitration_id.pgn.value - msg.arbitration_id.pgn.pdu_specific) == constants.PGN_TP_DATA_TRANSFER:
-            self._incomplete_received_msgs[msg.arbitration_id.source_address][
-                msg.arbitration_id.pgn.pdu_specific].timestamp = msg.timestamp
-            retval = copy.deepcopy(
-                self._incomplete_received_msgs[msg.arbitration_id.source_address][msg.arbitration_id.pgn.pdu_specific])
-            retval.data = retval.data[:self._incomplete_received_msg_lengths[msg.arbitration_id.source_address][
-                msg.arbitration_id.pgn.pdu_specific]["total"]]
-            del self._incomplete_received_msgs[msg.arbitration_id.source_address][msg.arbitration_id.pgn.pdu_specific]
-            del self._incomplete_received_msg_lengths[msg.arbitration_id.source_address][
-                msg.arbitration_id.pgn.pdu_specific]
-        else:
-            if msg.arbitration_id.pgn.pdu_specific in self._incomplete_received_msgs:
-                if msg.arbitration_id.source_address in self._incomplete_received_msgs[
-                        msg.arbitration_id.pgn.pdu_specific]:
-                    self._incomplete_received_msgs[msg.arbitration_id.pgn.pdu_specific][
-                        msg.arbitration_id.source_address].timestamp = msg.timestamp
-                    retval = copy.deepcopy(self._incomplete_received_msgs[msg.arbitration_id.pgn.pdu_specific][
-                        msg.arbitration_id.source_address])
-                    retval.data = retval.data[:
-                                              self._incomplete_received_msg_lengths[msg.arbitration_id.pgn.pdu_specific][
-                                                  msg.arbitration_id.source_address]["total"]]
-                    del self._incomplete_received_msgs[msg.arbitration_id.pgn.pdu_specific][
-                        msg.arbitration_id.source_address]
-                    del self._incomplete_received_msg_lengths[msg.arbitration_id.pgn.pdu_specific][
-                        msg.arbitration_id.source_address]
-                else:
-                    retval = None
-            else:
-                retval = None
-            if msg.arbitration_id.pgn.pdu_specific in self._incomplete_transmitted_msgs:
-                if msg.arbitration_id.source_address in self._incomplete_transmitted_msgs[
-                        msg.arbitration_id.pgn.pdu_specific]:
-                    del self._incomplete_transmitted_msgs[msg.arbitration_id.pgn.pdu_specific][
-                        msg.arbitration_id.source_address]
-
-        return retval
-
-    def _process_bam(self, msg):
-        self._process_rts(msg)
-
-    def _process_abort(self, msg):
-        if msg.arbitration_id.pgn.pdu_specific in self._incomplete_received_msgs:
-            if msg.source in self._incomplete_received_msgs[msg.arbitration_id.pgn.pdu_specific]:
-                del self._incomplete_received_msgs[msg.arbitration_id.pgn.pdu_specific][
-                    msg.arbitration_id.source_address]
-
-    def _throttler_function(self):
-        while self.can_notifier.running.is_set():
-            _msg = None
-            try:
-                _msg = self._long_message_segment_queue.get(timeout=0.1)
-            except Empty:
-                pass
-            if _msg is not None:
-                self.can_bus.send(_msg)
-
-    @property
-    def transmissions_in_progress(self):
-        retval = 0
-        for _tx_address in self._incomplete_transmitted_msgs:
-            retval += len(self._incomplete_transmitted_msgs[_tx_address])
-        for _rx_address in self._incomplete_received_msgs:
-            retval += len(self._incomplete_received_msgs[_rx_address])
-        return retval
+class CAN_FRAME(ctypes.Structure):
+    # See /usr/include/linux/can.h for original struct
+    # The 32bit can id is directly followed by the 8bit data link count
+    # The data field is aligned on an 8 byte boundary, hence the padding.
+    # Aligns the data field to an 8 byte boundary
+    _fields_ = [("can_id", ctypes.c_uint32),
+                ("can_dlc", ctypes.c_uint8),
+                ("padding", ctypes.c_ubyte * 3),
+                ("data", ctypes.c_uint8 * 8),
+                ("MAC",  ctypes.c_uint32 * 3)
+                ]

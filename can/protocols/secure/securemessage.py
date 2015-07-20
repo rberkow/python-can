@@ -1,4 +1,5 @@
 import logging
+from Crypto.Hash import SHA1
 from can import Message
 
 from can.protocols.secure.arbitrationid import ArbitrationID
@@ -11,18 +12,22 @@ logger = logging.getLogger(__name__)
 class SecureMessage(Message):
 
     """
-    A PDU is a higher level abstraction of a CAN message.
-    J1939 ensures that long messages are taken care of.
+    Message object to send
     """
 
-    def __init__(self, timestamp=0.0, arbitration_id=None, data=None, info_strings=None):
+    def __init__(self, timestamp=0.0, arbitration_id=None, data=None, MACs=None, info_strings=None, id_table_entry=None):
         """
         :param float timestamp:
             Bus time in seconds.
-        :param :class:`can.protocols.j1939.ArbitrationID` arbitration_id:
+
+        :param :class:`can.protocols.secure.ArbitrationID` arbitration_id:
+            Arbitration ID of message (also serves as index for ID Table at receiving node)
 
         :param bytes/bytearray/list data:
-            With length up to 1785.
+            With length up to 5.
+
+        :param list id_table_entry:
+            Metadata about message to add to ID Table of receiving node
         """
         if data is None:
             data = []
@@ -32,32 +37,43 @@ class SecureMessage(Message):
         self.arbitration_id = arbitration_id
         self.data = self._check_data(data)
         self.info_strings = info_strings
+        self.id_table_entry = id_table_entry
+        self.counter = 0
+        self.MACs = []
 
     def __eq__(self, other):
-        """Returns True if the pgn, data, source and destination are the same"""
+        """Returns True if the data, source and destinations are the same"""
         if other is None:
-            return False
-        if self.pgn != other.pgn:
             return False
         if self.data != other.data:
             return False
         if self.source != other.source:
             return False
-        if self.destination != other.destination:
+        if self.destintation_quantity != other.destintation_quantity:
             return False
+        for i in range(self.destintation_quantity):
+            if self.destinations[i] != other.destinations[i]:
+                return False
         return True
 
     @property
-    def pgn(self):
-        if self.arbitration_id.pgn.is_destination_specific:
-            return self.arbitration_id.pgn.value & 0xFF00
-        else:
-            return self.arbitration_id.pgn.value
+    def MACs(self):
+        """compute MACs for message"""
+        if not data:
+            return None
+        for i, dest in enumerate(self.destinations):
+            self.MACs[i]
+
 
     @property
-    def destination(self):
-        """Destination address of the message"""
-        return self.arbitration_id.destination_address
+    def destinations(self):
+        """Message's destinations' addresses"""
+        return self.arbitration_id.destination_addresses
+
+    @property
+    def destintation_quantity(self):
+        """Number of destinations for the message"""
+        return self.arbitration_id.destintation_quantity
 
     @property
     def source(self):
@@ -65,15 +81,14 @@ class SecureMessage(Message):
         return self.arbitration_id.source_address
 
     @property
-    def is_address_claim(self):
-        return self.pgn == PGN_AC_ADDRESS_CLAIMED
-
-    @property
     def arbitration_id(self):
         return self._arbitration_id
 
     @arbitration_id.setter
     def arbitration_id(self, other):
+        """
+        Sets arbitration ID from ArbitrationID object or list of `[priority, destination_addresses, source_address]`
+        """
         if other is None:
             self._arbitration_id = ArbitrationID()
         elif not isinstance(other, ArbitrationID):
@@ -81,14 +96,26 @@ class SecureMessage(Message):
         else:
             self._arbitration_id = other
 
+    @property
+    def id_table_entry(self):
+        return self._id_table_entry
+
+    @id_table_entry.setter
+    def id_table_entry(self, other):
+        """
+        Sets values for ID table
+        """
+        self._id_table_entry = [self.source, self.destintations]
+
+
     def _check_data(self, value):
-        assert len(value) <= 1785, 'Too much data to fit in a j1939 CAN message. Got {0} bytes'.format(len(value))
+        assert len(value) <= 5, 'Too much data to fit in message. Got {0} bytes'.format(len(value))
         if len(value) > 0:
             assert min(value) >= 0, 'Data values must be between 0 and 255'
             assert max(value) <= 255, 'Data values must be between 0 and 255'
         return value
 
-    def data_segments(self, segment_length=8):
+    def data_segments(self, segment_length=5):
         retval = []
         for i in range(0, len(self.data), segment_length):
             retval.append(self.data[i:i + min(segment_length, (len(self.data) - i))])
@@ -96,7 +123,7 @@ class SecureMessage(Message):
 
     def check_equality(self, other, fields, debug=False):
         """
-        :param :class:`~can.protocols.j1939.PDU` other:
+        :param :class:`~can.protocols.secure.SecureMessage` other:
         :param list[str] fields:
         """
 

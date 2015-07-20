@@ -17,6 +17,7 @@ class SecureBusTest(unittest.TestCase):
 
     def testCreateBus(self):
         self.bus = secure.Bus(node_id=0, channel=can_interface)
+        self.bus.recv(timeout=100)
         self.bus.shutdown()
 
     def testArbitrationID(self):
