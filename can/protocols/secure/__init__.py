@@ -84,9 +84,6 @@ class Bus(BusABC):
 
         rx_msg = SecureMessage(
             timestamp=packet['Timestamp'],
-            is_remote_frame=bool(flags & SKT_RTRFLG),
-            extended_id=bool(flags & EXTFLG),
-            is_error_frame=bool(flags & SKT_ERRFLG),
             arbitration_id=arbitration_id,
             dlc=packet['DLC'],
             data=packet['Data'],
@@ -134,7 +131,7 @@ def capturePacket(socketID):
     packet['CAN ID'] = frame.can_id
     packet['DLC'] = frame.can_dlc
     packet["Data"] = [frame.data[i] for i in range(frame.can_dlc)]
-    packet['MAC'] = frame.MAC
+    packet['MAC'] = [frame.MAC[i] for i in range(frame.can_dlc)]
 
     timestamp = time.tv_sec + (time.tv_usec / 1000000.0)
 

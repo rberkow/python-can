@@ -15,7 +15,7 @@ class SecureMessage(Message):
     Message object to send
     """
 
-    def __init__(self, timestamp=0.0, arbitration_id=None, data=None, MACs=None, info_strings=None, id_table_entry=None):
+    def __init__(self, timestamp=0.0, arbitration_id=None, data=None, dlc=None, MACs=[], info_strings=None, id_table_entry=None):
         """
         :param float timestamp:
             Bus time in seconds.
@@ -39,7 +39,7 @@ class SecureMessage(Message):
         self.info_strings = info_strings
         self.id_table_entry = id_table_entry
         self.counter = 0
-        self.MACs = []
+        self.MACs = MACs
 
     def __eq__(self, other):
         """Returns True if the data, source and destinations are the same"""
@@ -49,20 +49,17 @@ class SecureMessage(Message):
             return False
         if self.source != other.source:
             return False
-        if self.destintation_quantity != other.destintation_quantity:
+        if self.arbitration_id != other.arbitration_id:
             return False
-        for i in range(self.destintation_quantity):
-            if self.destinations[i] != other.destinations[i]:
-                return False
         return True
 
     @property
-    def MACs(self):
+    def compute_MACs(self):
         """compute MACs for message"""
-        if not data:
+        if not self.data:
             return None
         for i, dest in enumerate(self.destinations):
-            self.MACs[i]
+            self.MACs[i] = SHA1()
 
 
     @property
@@ -105,7 +102,7 @@ class SecureMessage(Message):
         """
         Sets values for ID table
         """
-        self._id_table_entry = [self.source, self.destintations]
+        self._id_table_entry = [self.source, self.arbitration_id.destination_addresses]
 
 
     def _check_data(self, value):
@@ -145,7 +142,9 @@ class SecureMessage(Message):
 
             if debug:
                 self.info_strings.append("%s: %s, %s" % (field, own_value, other_value))
-            if own_value != other_value:
+            if own_value == other_value:
+                return True
+            else:
                 return False
 
         logger.debug("Messages match")
