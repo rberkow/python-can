@@ -23,7 +23,7 @@ class Node(Listener):
 
     """
     :param :class:`can.Bus` bus:
-    :param :class:`can.protocols.j1939.NodeName` name:
+    :param :class:`can.protocols.secure.NodeName` name:
     :param list(int) address_list:
         A list of potential addresses that this Node will use when claiming
         an address.
@@ -41,6 +41,5 @@ class Node(Listener):
 
     def on_message_received(self, msg):
 
-
-        self.id_table.add_row()
+        self.id_table.add_row(msg.souce, msg.destinations)
 

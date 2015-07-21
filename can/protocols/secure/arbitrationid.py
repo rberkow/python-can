@@ -47,12 +47,27 @@ class ArbitrationID(object):
 
     @property
     def destinations(self):
+        "Format destination addresses for CAN ID"
         _destinations = 0x0
         for i, dest in enumerate(self.destination_addresses):
             _destinations += dest << (2 - i) * 6
         return _destinations
 
+    def __eq__(self, other):
+        if other is None:
+            return False
+        if self.priority != other.priority:
+            return False
+        if self.destination_quantity != other.destination_quantity:
+            return False
+        if self.destination_addresses != other.destination_addresses:
+            return False
+        if self.source_address != other.source_address:
+            return False
+        return True
+
     def __str__(self):
         dests = "00" + bin(self.destinations)[2:]
+        dests = dests.zfill(18)
         return "PRI=%d SRC=0x%.2x QUANT=%d DST1=0x%.2x DST2=0x%.2x DST3=0x%.2x" % (
                 self.priority, self.source_address, self.destination_quantity, int(dests[:6], 2), int(dests[6:12], 2), int(dests[12:], 2))

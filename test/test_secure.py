@@ -17,7 +17,7 @@ class SecureBusTest(unittest.TestCase):
 
     def testCreateBus(self):
         self.bus = secure.Bus(node_id=0, channel=can_interface)
-        self.bus.recv(timeout=100)
+        self.bus.recv(timeout=2)
         self.bus.shutdown()
 
     def testArbitrationID(self):
@@ -28,4 +28,4 @@ class SecureBusTest(unittest.TestCase):
     def testMessage(self):
         self.msg = SecureMessage()
         another_msg = SecureMessage(arbitration_id=ArbitrationID(priority=7))
-        self.assertTrue(self.msg.check_equality(another_msg, ["priority"]))
+        self.assertTrue(self.msg.check_equality(another_msg, ["arbitration_id"]))
