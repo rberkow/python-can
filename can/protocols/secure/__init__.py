@@ -6,27 +6,23 @@ in International Conference on Cyber Security, Cyber Warfare and Digital Forensi
 """
 
 import logging
+import string
+import random
 import select
 import ctypes
 import can
 
-
+from Crypto.Hash import HMAC
 # By this stage the can.rc should have been set up
 from can.message import Message as RawMessage
 from can.interfaces.interface import Bus as RawCanBus
 from can.interfaces.socketcan_ctypes import *
 from can.interfaces.socketcan_constants import *
-from can.interfaces import interface
-
-from can.notifier import Notifier
+from can.bus import BusABC
 
 # Import our new message type
 from can.protocols.secure.securemessage import SecureMessage
-from can.protocols.secure.pgn import PGN
-from can.bus import BusABC
 from can.protocols.secure.node import Node
-from can.protocols.secure.nodename import NodeName
-from can.protocols.secure.arbitrationid import ArbitrationID
 
 
 logger = logging.getLogger(__name__)
@@ -48,22 +44,51 @@ class Bus(BusABC):
     def __init__(self,
                  channel=can.rc['channel'],
                  receive_own_messages=False,
+                 claimed_addresses=[],
                  *args, **kwargs):
         """
         :param str channel:
             The can interface name with which to create this bus. An example channel
             would be 'vcan0'.
+        :param list claimed_addresses:
+            Addresses of nodes that have been instantiated already elsewhere on the bus.
         """
 
         self.socket = createSocket()
 
-        log.debug("Result of createSocket was %d", self.socket)
+        logging.debug("Result of createSocket was %d", self.socket)
         error = bindSocket(self.socket, channel)
+
+        logging.debug("bindSocket returned %d", error)
+
+        self.nodes = []
+
+        for addr in claimed_addresses:
+            self.nodes.append(Node(bus=self, address=addr))
+
+        self.nodes.append(self.local_node)
+
+
 
         if receive_own_messages:
             error1 = recv_own_msgs(self.socket)
 
         super(Bus, self).__init__(*args, **kwargs)
+
+    @property
+    def local_node(self):
+        retval = 0
+        while retval in self.node_addresses:
+            retval += 1
+        else:
+            return Node(bus=self, address=retval)
+
+    @property
+    def node_addresses(self):
+        retval = []
+        for node in self.nodes:
+            retval.append(node.address)
+        return retval
 
     def recv(self, timeout=None):
         log.debug("Trying to read a msg")
@@ -90,10 +115,58 @@ class Bus(BusABC):
             MACs=packet['MAC']
         )
 
+        for dest in rx_msg.destinations:
+            if dest not in self.nodes:
+                self.nodes.append(Node(bus=self, address=dest))
+
+        self.local_node.on_message_received(rx_msg)
+
         return rx_msg
 
     def send(self, msg):
+        self.compute_MACs(msg)
+        sendPacket(self.socket, msg)
         return None
+
+    def get_node(self, address):
+        for n in self.nodes:
+            if n.address == address:
+                return n
+        return None
+
+    def compute_MACs(self, msg):
+        """compute MACs for message"""
+        for dest in msg.destinations:
+            node = self.get_node(dest)
+            msg.MACs.append(HMAC.new(b''+node.key.hexdigest(), msg.binary_data_string))
+
+def _build_can_frame(message):
+    log.debug("Packing a can frame")
+    arbitration_id = message.arbitration_id.can_id | 0x80000000
+    log.debug("Data: %s", message.data)
+    log.debug("Type: %s", type(message.data))
+    log.debug("MAC: %s", [int(mac.hexdigest(), 16) for mac in message.MACs])
+
+    # TODO need to understand the extended frame format
+    frame = CAN_FRAME_MAC()
+    frame.can_id = arbitration_id
+    frame.can_dlc = len(message.data)
+    frame.MAC[:len(message.destinations)] = [int(mac.hexdigest(), 16) for mac in message.MACs]
+
+    frame.data[:frame.can_dlc] = message.data
+
+    logging.debug("sizeof frame: %d", ctypes.sizeof(frame))
+    log.debug("MACs: %s", frame.MAC)
+    return frame
+
+
+def sendPacket(socket, message):
+    frame = _build_can_frame(message)
+    bytes_sent = libc.write(socket, ctypes.byref(frame), ctypes.sizeof(frame))
+    if bytes_sent == -1:
+        logging.debug("Error sending frame")
+
+    return bytes_sent
 
 def capturePacket(socketID):
     """
@@ -119,7 +192,7 @@ def capturePacket(socketID):
     """
     packet = {}
 
-    frame = CAN_FRAME()
+    frame = CAN_FRAME_MAC()
     time = TIME_VALUE()
 
     # Fetching the Arb ID, DLC and Data
@@ -131,7 +204,7 @@ def capturePacket(socketID):
     packet['CAN ID'] = frame.can_id
     packet['DLC'] = frame.can_dlc
     packet["Data"] = [frame.data[i] for i in range(frame.can_dlc)]
-    packet['MAC'] = [frame.MAC[i] for i in range(frame.can_dlc)]
+    packet['MAC'] = [frame.MAC[i] for i in range(3)]
 
     timestamp = time.tv_sec + (time.tv_usec / 1000000.0)
 
@@ -139,7 +212,8 @@ def capturePacket(socketID):
 
     return packet
 
-class CAN_FRAME(ctypes.Structure):
+
+class CAN_FRAME_MAC(ctypes.Structure):
     # See /usr/include/linux/can.h for original struct
     # The 32bit can id is directly followed by the 8bit data link count
     # The data field is aligned on an 8 byte boundary, hence the padding.

@@ -1,5 +1,4 @@
 import logging
-from Crypto.Hash import SHA1
 from can import Message
 
 from can.protocols.secure.arbitrationid import ArbitrationID
@@ -53,14 +52,8 @@ class SecureMessage(Message):
             return False
         return True
 
-    @property
-    def compute_MACs(self):
-        """compute MACs for message"""
-        if not self.data:
-            return None
-        for i, dest in enumerate(self.destinations):
-            self.MACs[i] = SHA1()
-
+    def __ne__(self, other):
+        return not self.__eq__(other)
 
     @property
     def destinations(self):
@@ -68,14 +61,18 @@ class SecureMessage(Message):
         return self.arbitration_id.destination_addresses
 
     @property
-    def destintation_quantity(self):
+    def destination_quantity(self):
         """Number of destinations for the message"""
-        return self.arbitration_id.destintation_quantity
+        return self.arbitration_id.destination_quantity
 
     @property
     def source(self):
         """Source address of the message"""
         return self.arbitration_id.source_address
+
+    @property
+    def binary_data_string(self):
+        return b''.join(''.format(b) for b in self.data)
 
     @property
     def arbitration_id(self):
@@ -106,13 +103,13 @@ class SecureMessage(Message):
 
 
     def _check_data(self, value):
-        assert len(value) <= 5, 'Too much data to fit in message. Got {0} bytes'.format(len(value))
+        assert len(value) <= 8, 'Too much data to fit in message. Got {0} bytes'.format(len(value))
         if len(value) > 0:
             assert min(value) >= 0, 'Data values must be between 0 and 255'
             assert max(value) <= 255, 'Data values must be between 0 and 255'
         return value
 
-    def data_segments(self, segment_length=5):
+    def data_segments(self, segment_length=8):
         retval = []
         for i in range(0, len(self.data), segment_length):
             retval.append(self.data[i:i + min(segment_length, (len(self.data) - i))])
@@ -142,9 +139,7 @@ class SecureMessage(Message):
 
             if debug:
                 self.info_strings.append("%s: %s, %s" % (field, own_value, other_value))
-            if own_value == other_value:
-                return True
-            else:
+            if own_value != other_value:
                 return False
 
         logger.debug("Messages match")

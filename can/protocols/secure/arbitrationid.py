@@ -53,6 +53,9 @@ class ArbitrationID(object):
             _destinations += dest << (2 - i) * 6
         return _destinations
 
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
     def __eq__(self, other):
         if other is None:
             return False

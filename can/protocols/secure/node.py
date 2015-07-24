@@ -1,14 +1,15 @@
 import logging
 
-log = logging.getLogger('py1939.node')
-log.info('Loading J1939 node')
+log = logging.getLogger('secure.node')
+log.info('Loading secure node')
+
+from Crypto.Hash import SHA1
+from Crypto.Hash import HMAC
 
 from can import Listener, CanError
 from can.protocols.secure.constants import *
 from can.protocols.secure.idtable import IDTable
 from can.protocols.secure.nodename import NodeName
-
-
 
 
 class DuplicateTransmissionError(CanError):
@@ -23,23 +24,29 @@ class Node(Listener):
 
     """
     :param :class:`can.Bus` bus:
-    :param :class:`can.protocols.secure.NodeName` name:
-    :param list(int) address_list:
-        A list of potential addresses that this Node will use when claiming
-        an address.
+        Bus that the node is on
+    :param int address:
+        Address of the node
     """
 
-    def __init__(self, bus, name):
+    def __init__(self, bus, address):
         self.bus = bus
         self.id_table = IDTable()
-        self.node_name = name
+        self.address = address
+        self.key = self.generate_key()
 
-    @property
-    def address(self):
-        return self.known_node_addresses[self.node_name.value]
-
-
+    def generate_key(self):
+        """
+        This should be randomly generated, but I don't have time to implement key exchange;
+        it is simply be a hash of the address for now.
+        """
+        addr = str(self.address)
+        h = SHA1.new()
+        h.update(b''+addr)
+        return h
+        
     def on_message_received(self, msg):
-
-        self.id_table.add_row(msg.souce, msg.destinations)
-
+        for mac in msg.MACs:
+            h = HMAC.new(b''+self.key.hexdigest(), msg.binary_data_string).hexdigest()
+            if mac.hexdigest() == h:
+                self.id_table.add_row(msg.source, msg.destinations)
