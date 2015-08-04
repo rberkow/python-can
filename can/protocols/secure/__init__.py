@@ -11,6 +11,7 @@ import random
 import select
 import ctypes
 import can
+import os
 
 from Crypto.Hash import HMAC
 # By this stage the can.rc should have been set up
@@ -22,6 +23,7 @@ from can.bus import BusABC
 
 # Import our new message type
 from can.protocols.secure.securemessage import SecureMessage
+from can.protocols.secure.arbitrationid import ArbitrationID
 from can.protocols.secure.node import Node
 
 
@@ -44,6 +46,7 @@ class Bus(BusABC):
     def __init__(self,
                  channel=can.rc['channel'],
                  receive_own_messages=False,
+                 fd_frames=False,
                  claimed_addresses=[],
                  *args, **kwargs):
         """
@@ -56,6 +59,9 @@ class Bus(BusABC):
 
         self.socket = createSocket()
 
+        if fd_frames:
+            set_fd_frames(self.socket)
+
         logging.debug("Result of createSocket was %d", self.socket)
         error = bindSocket(self.socket, channel)
 
@@ -66,9 +72,9 @@ class Bus(BusABC):
         for addr in claimed_addresses:
             self.nodes.append(Node(bus=self, address=addr))
 
+        self.local_node = self.find_local_node
+
         self.nodes.append(self.local_node)
-
-
 
         if receive_own_messages:
             error1 = recv_own_msgs(self.socket)
@@ -76,7 +82,7 @@ class Bus(BusABC):
         super(Bus, self).__init__(*args, **kwargs)
 
     @property
-    def local_node(self):
+    def find_local_node(self):
         retval = 0
         while retval in self.node_addresses:
             retval += 1
@@ -100,9 +106,8 @@ class Bus(BusABC):
             # socket wasn't readable or timeout occurred
             return None
 
-        log.debug("Receiving a message")
-
-        arbitration_id = packet['CAN ID'] & MSK_ARBID
+        arbitration_id = ArbitrationID()
+        arbitration_id.can_id = packet['CAN ID']
 
         # Flags: EXT, RTR, ERR
         flags = (packet['CAN ID'] & MSK_FLAGS) >> 29
@@ -110,9 +115,8 @@ class Bus(BusABC):
         rx_msg = SecureMessage(
             timestamp=packet['Timestamp'],
             arbitration_id=arbitration_id,
-            dlc=packet['DLC'],
-            data=packet['Data'],
-            MACs=packet['MAC']
+            data=packet['Data'][:-2],
+            MACs=packet['Data'][-2:]
         )
 
         for dest in rx_msg.destinations:
@@ -121,10 +125,17 @@ class Bus(BusABC):
 
         self.local_node.on_message_received(rx_msg)
 
+        log.debug("Local node address at receiver: %x", self.local_node.address)
+
+        log.debug("arbID at receiver: %s", rx_msg.arbitration_id)
+
+        log.debug("ID table entry: %s", self.local_node.id_table)
+
         return rx_msg
 
     def send(self, msg):
         self.compute_MACs(msg)
+        msg.arbitration_id.source_address = self.local_node.address
         sendPacket(self.socket, msg)
         return None
 
@@ -137,34 +148,60 @@ class Bus(BusABC):
     def compute_MACs(self, msg):
         """compute MACs for message"""
         for dest in msg.destinations:
+            if not self.get_node(dest):
+                self.nodes.append(Node(bus=self, address=dest))
             node = self.get_node(dest)
             msg.MACs.append(HMAC.new(b''+node.key.hexdigest(), msg.binary_data_string))
 
 def _build_can_frame(message):
     log.debug("Packing a can frame")
-    arbitration_id = message.arbitration_id.can_id | 0x80000000
-    log.debug("Data: %s", message.data)
-    log.debug("Type: %s", type(message.data))
-    log.debug("MAC: %s", [int(mac.hexdigest(), 16) for mac in message.MACs])
+    message.data += [0] * (6 - len(message.data))
 
-    # TODO need to understand the extended frame format
-    frame = CAN_FRAME_MAC()
-    frame.can_id = arbitration_id
-    frame.can_dlc = len(message.data)
-    frame.MAC[:len(message.destinations)] = [int(mac.hexdigest(), 16) for mac in message.MACs]
 
-    frame.data[:frame.can_dlc] = message.data
+    macs = hex_MAC(message)[-2:]
 
-    logging.debug("sizeof frame: %d", ctypes.sizeof(frame))
-    log.debug("MACs: %s", frame.MAC)
+    data_to_pack = [d for d in message.data] + [int(byte, 16) for byte in macs]
+
+    if len(data_to_pack) < 9:
+        frame = CAN_FRAME()
+        frame.can_dlc = len(data_to_pack)
+        frame.__res0 = 0;
+        frame.__res1 = 0;
+    else:
+        frame = CANFD_FRAME()
+        frame.len = 15
+
+    frame.can_id = message.arbitration_id.can_id | 0x80000000
+
+
+    frame.data[:len(data_to_pack)] = bytearray(data_to_pack)
+    log.debug("arbID at sender: %s", message.arbitration_id)
     return frame
 
+def hex_MAC(message):
+    retval = []
+    for mac in message.MACs:
+        bytes = []
+        string_mac = str(mac.hexdigest())
+        for i in range(0, len(string_mac)-1, 2):
+            bytes.append(string_mac[i: i+2])
+        retval+=bytes
+    return retval
+
+
+def set_fd_frames(socket_id):
+    setting = ctypes.c_int(1);
+    error = libc.setsockopt(socket_id, SOL_CAN_RAW, CAN_RAW_FD_FRAMES, ctypes.byref(setting), ctypes.sizeof(setting))
+
+    if error < 0:
+        log.error("Couldn't enable FD frames")
 
 def sendPacket(socket, message):
     frame = _build_can_frame(message)
     bytes_sent = libc.write(socket, ctypes.byref(frame), ctypes.sizeof(frame))
+    log.debug("%d bytes sent", bytes_sent)
     if bytes_sent == -1:
-        logging.debug("Error sending frame")
+        libc.perror("Error sending frame")
 
     return bytes_sent
 
@@ -176,15 +213,12 @@ def capturePacket(socketID):
         The socket to read from
 
     :return:
+
         A dictionary with the following keys:
         +-----------+----------------------------+
         | 'CAN ID'  |  int                       |
         +-----------+----------------------------+
-        | 'DLC'     |  int                       |
-        +-----------+----------------------------+
         | 'Data'    |  list                      |
-        +-----------+----------------------------+
-        | 'MAC'     |  int                       |
         +-----------+----------------------------+
         |'Timestamp'|   float                    |
         +-----------+----------------------------+
@@ -192,19 +226,22 @@ def capturePacket(socketID):
     """
     packet = {}
 
-    frame = CAN_FRAME_MAC()
+    frame = CAN_FRAME()
     time = TIME_VALUE()
+
+
 
     # Fetching the Arb ID, DLC and Data
     bytes_read = libc.read(socketID, ctypes.byref(frame), ctypes.sizeof(frame))
+
+    log.debug("%d bytes read", bytes_read)
 
     # Fetching the timestamp
     error = libc.ioctl(socketID, SIOCGSTAMP, ctypes.byref(time))
 
     packet['CAN ID'] = frame.can_id
-    packet['DLC'] = frame.can_dlc
-    packet["Data"] = [frame.data[i] for i in range(frame.can_dlc)]
-    packet['MAC'] = [frame.MAC[i] for i in range(3)]
+    packet['Length'] = frame.can_dlc
+    packet['Data'] = frame.data[:8]
 
     timestamp = time.tv_sec + (time.tv_usec / 1000000.0)
 
@@ -213,14 +250,15 @@ def capturePacket(socketID):
     return packet
 
 
-class CAN_FRAME_MAC(ctypes.Structure):
+class CANFD_FRAME(ctypes.Structure):
     # See /usr/include/linux/can.h for original struct
     # The 32bit can id is directly followed by the 8bit data link count
     # The data field is aligned on an 8 byte boundary, hence the padding.
     # Aligns the data field to an 8 byte boundary
     _fields_ = [("can_id", ctypes.c_uint32),
-                ("can_dlc", ctypes.c_uint8),
-                ("padding", ctypes.c_ubyte * 3),
-                ("data", ctypes.c_uint8 * 8),
-                ("MAC",  ctypes.c_uint32 * 3)
+                ("len", ctypes.c_uint8),
+                ("flags", ctypes.c_uint8),
+                ("res0", ctypes.c_uint8),
+                ("res1", ctypes.c_uint8),
+                ("data", ctypes.c_uint8 * 64)
                 ]

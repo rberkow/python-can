@@ -14,7 +14,7 @@ class SecureMessage(Message):
     Message object to send
     """
 
-    def __init__(self, timestamp=0.0, arbitration_id=None, data=None, dlc=None, MACs=[], info_strings=None, id_table_entry=None):
+    def __init__(self, timestamp=0.0, arbitration_id=None, data=None, MACs=[], info_strings=None, id_table_entry=None):
         """
         :param float timestamp:
             Bus time in seconds.
@@ -103,7 +103,7 @@ class SecureMessage(Message):
 
 
     def _check_data(self, value):
-        assert len(value) <= 8, 'Too much data to fit in message. Got {0} bytes'.format(len(value))
+        # assert len(value) <= 8, 'Too much data to fit in message. Got {0} bytes'.format(len(value))
         if len(value) > 0:
             assert min(value) >= 0, 'Data values must be between 0 and 255'
             assert max(value) <= 255, 'Data values must be between 0 and 255'
@@ -153,4 +153,5 @@ class SecureMessage(Message):
         """
         # TODO group this into 8 bytes per line and line them up...
         data_string = " ".join("{:02d}".format(byte) for byte in self.data)
-        return "{s.timestamp:15.6f}    {s.arbitration_id}    {data}".format(s=self, data=data_string)
+        mac_string = " ".join("{0}".format(byte) for byte in self.MACs)
+        return "{s.timestamp:15.6f}    {s.arbitration_id}    {data}     {mac}".format(s=self, data=data_string, mac=mac_string)

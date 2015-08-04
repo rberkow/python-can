@@ -29,6 +29,7 @@ RX_RTR_FRAME        = 0x0400
 
 CAN_RAW =       1
 CAN_BCM =       2
+CAN_MAC = 		8
 
 SOL_CAN_BASE = 100
 SOL_CAN_RAW  = SOL_CAN_BASE + CAN_RAW
@@ -45,6 +46,7 @@ MSK_FLAGS =     0xE0000000
 PF_CAN  =       29
 SOCK_RAW =      3
 SOCK_DGRAM =    2
+SOCK_MAC = 		4
 AF_CAN =        PF_CAN
 
 SIOCGIFINDEX =  0x8933

@@ -170,6 +170,8 @@ def createSocket(protocol=CAN_RAW):
         socketID = libc.socket(PF_CAN, SOCK_RAW, CAN_RAW)
     elif protocol == CAN_BCM:
         socketID = libc.socket(PF_CAN, SOCK_DGRAM, CAN_BCM)
+    elif protocol == CAN_MAC:
+        socketID = libc.socket(PF_CAN, SOCK_MAC, CAN_MAC)
     else:
         socketID = -1
 
@@ -239,6 +241,7 @@ def connectSocket(socketID, channel_name):
     # select the CAN interface and bind the socket to it
     addr = SOCKADDR_CAN(AF_CAN, ifr.ifr_ifindex)
 
+
     error = libc.connect(socketID, ctypes.byref(addr), ctypes.sizeof(addr))
 
     if error < 0:
@@ -246,7 +249,6 @@ def connectSocket(socketID, channel_name):
     log.debug('connect returned: %d', error)
 
     return error
-
 
 def recv_own_msgs(socket_id):
     setting = ctypes.c_int(1)

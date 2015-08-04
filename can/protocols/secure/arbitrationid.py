@@ -1,9 +1,11 @@
 from can.protocols.j1939.pgn import PGN
+import logging
 
+logger = logging.getLogger(__name__)
 
 class ArbitrationID(object):
 
-    def __init__(self, priority=7, destination_addresses=[], source_address=0):
+    def __init__(self, priority=7, destination_addresses=[0], source_address=0):
         """
         Extended ID format (29 bits)
              |---|------|--|------ ------ ------|
@@ -29,7 +31,7 @@ class ArbitrationID(object):
 
     @property
     def can_id(self):
-        return self.destinations + (self.destination_quantity << 18) + (self.source_address << 20) + (self.priority << 26)
+        return self.destinations + (len(self.destination_addresses) << 18) + (self.source_address << 20) + (self.priority << 26)
 
     @can_id.setter
     def can_id(self, value):

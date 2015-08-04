@@ -46,7 +46,15 @@ class Node(Listener):
         return h
         
     def on_message_received(self, msg):
-        for mac in msg.MACs:
-            h = HMAC.new(b''+self.key.hexdigest(), msg.binary_data_string).hexdigest()
-            if mac.hexdigest() == h:
-                self.id_table.add_row(msg.source, msg.destinations)
+        print msg.MACs
+        m = msg.MACs[:2]
+        m = [str(hex(x)) for x in m]
+        string_mac = ""
+        for x in m:
+            string_mac += x[-2:]
+        h = HMAC.new(b''+self.key.hexdigest(), msg.binary_data_string).hexdigest()[-4:]
+        log.debug("MACs at receiving node: %s", string_mac)
+        log.debug("MACs computed at node: %s", h)
+        if string_mac == h:
+            log.debug("source: %d, destination: %d", msg.source, msg.destinations[0])
+            self.id_table.add_row(msg.source, msg.destinations)
