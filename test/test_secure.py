@@ -30,12 +30,13 @@ class SecureBusTest(unittest.TestCase):
         arb = ArbitrationID(priority=5, destination_addresses = [0], source_address=bus.local_node.address)
         msg = SecureMessage(data=[0, 245, 134], arbitration_id=arb)
         bus.send(msg)
+        bus.recv()
 
     def testRecv(self):
         bus = Bus(channel=can_interface)
         print "recv addr: {0}".format(bus.local_node.address)
-        msg = bus.recv(timeout=2)
-        print msg
+        print bus.recv(timeout=2)
+
 
     # def testMACs(self):
     #     bus = Bus(channel=can_interface, claimed_addresses=[0,1])

@@ -46,15 +46,25 @@ class Node(Listener):
         return h
         
     def on_message_received(self, msg):
-        print msg.MACs
         m = msg.MACs[:2]
         m = [str(hex(x)) for x in m]
         string_mac = ""
         for x in m:
-            string_mac += x[-2:]
+            to_add = x[-2:]
+            if 'x' in to_add:
+                to_add = '0' + to_add[1:]
+            string_mac += to_add
         h = HMAC.new(b''+self.key.hexdigest(), msg.binary_data_string).hexdigest()[-4:]
         log.debug("MACs at receiving node: %s", string_mac)
         log.debug("MACs computed at node: %s", h)
         if string_mac == h:
+            msg_entry = self.id_table.get_entry(msg.source, msg.destinations)
+            if not msg_entry:
+                count_at_node = 0
+            else:
+                count_at_node = msg_entry['count']
             log.debug("source: %d, destination: %d", msg.source, msg.destinations[0])
-            self.id_table.add_row(msg.source, msg.destinations)
+            log.debug("count at node: %d, count from msg: %d", count_at_node, msg.data[5])
+            if count_at_node <= msg.data[5]:
+                msg.accepted = True
+                self.id_table.set_count(msg.source, msg.destinations, msg.data[5])

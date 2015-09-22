@@ -134,6 +134,9 @@ class Bus(BusABC):
         return rx_msg
 
     def send(self, msg):
+        msg.count = self.local_node.id_table.increment(msg.source, msg.destinations)
+        msg.data += [0] * (6 - len(msg.data))
+        msg.data[5] = msg.count
         self.compute_MACs(msg)
         msg.arbitration_id.source_address = self.local_node.address
         sendPacket(self.socket, msg)
@@ -155,7 +158,8 @@ class Bus(BusABC):
 
 def _build_can_frame(message):
     log.debug("Packing a can frame")
-    message.data += [0] * (6 - len(message.data))
+    
+
 
 
     macs = hex_MAC(message)[-2:]
@@ -170,6 +174,8 @@ def _build_can_frame(message):
     else:
         frame = CANFD_FRAME()
         frame.len = 15
+
+    log.debug("arbid forms %x, %d", message.arbitration_id.can_id, message.arbitration_id.can_id)
 
     frame.can_id = message.arbitration_id.can_id | 0x80000000
 

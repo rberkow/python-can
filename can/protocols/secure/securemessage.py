@@ -14,7 +14,7 @@ class SecureMessage(Message):
     Message object to send
     """
 
-    def __init__(self, timestamp=0.0, arbitration_id=None, data=None, MACs=[], info_strings=None, id_table_entry=None):
+    def __init__(self, timestamp=0.0, arbitration_id=None, data=None, MACs=[], info_strings=None):
         """
         :param float timestamp:
             Bus time in seconds.
@@ -32,13 +32,14 @@ class SecureMessage(Message):
             data = []
         if info_strings is None:
             info_strings = []
+
         self.timestamp = timestamp
         self.arbitration_id = arbitration_id
         self.data = self._check_data(data)
         self.info_strings = info_strings
-        self.id_table_entry = id_table_entry
-        self.counter = 0
         self.MACs = MACs
+        self.count = 0
+        self.accepted = False
 
     def __eq__(self, other):
         """Returns True if the data, source and destinations are the same"""
@@ -72,7 +73,7 @@ class SecureMessage(Message):
 
     @property
     def binary_data_string(self):
-        return b''.join(''.format(b) for b in self.data)
+        return ''.join(hex(b)[2:] for b in self.data)
 
     @property
     def arbitration_id(self):
@@ -90,16 +91,6 @@ class SecureMessage(Message):
         else:
             self._arbitration_id = other
 
-    @property
-    def id_table_entry(self):
-        return self._id_table_entry
-
-    @id_table_entry.setter
-    def id_table_entry(self, other):
-        """
-        Sets values for ID table
-        """
-        self._id_table_entry = [self.source, self.arbitration_id.destination_addresses]
 
 
     def _check_data(self, value):
