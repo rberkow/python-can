@@ -11,9 +11,17 @@ from can.protocols.secure import Bus
 
 interface = 'vcan0'
 
+NO_OF_MSGS = 99
+
 bus = Bus(channel=interface, claimed_addresses=[0, 1])
-time.clock()
 arb = ArbitrationID(priority=5, destination_addresses = [1], source_address=bus.local_node.address)
-msg = SecureMessage(data=[50], arbitration_id=arb)
-bus.send(msg)
-print time.clock()
+sum = 0
+for i in range(NO_OF_MSGS, 0, -1):
+    start_time = time.time()
+    msg = SecureMessage(data=[i], arbitration_id=arb)
+    bus.send(msg)
+    timer = time.time() - start_time
+    sum += timer
+
+
+print "average sending time per msg: ", sum/NO_OF_MSGS
