@@ -3,7 +3,7 @@ import logging
 log = logging.getLogger('secure.node')
 log.info('Loading secure node')
 
-from Crypto.Hash import SHA1
+from Crypto.Hash import SHA
 from Crypto.Hash import HMAC
 
 from can import Listener, CanError
@@ -41,7 +41,7 @@ class Node(Listener):
         it is simply be a hash of the address for now.
         """
         addr = str(self.address)
-        h = SHA1.new()
+        h = SHA.new()
         h.update(b''+addr)
         return h
         
